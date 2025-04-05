@@ -32,22 +32,14 @@
 
 1. 克隆仓库：
 ```bash
-git clone [repository-url]
+git clone https://github.com/mixuechu/binance-mcp.git
 cd binance-mcp-server
 ```
 
-2. 创建并激活虚拟环境：
-```bash
-python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-# 或
-.venv\Scripts\activate  # Windows
-```
+2. 创建并激活虚拟环境
 
 3. 安装依赖：
-```bash
-pip install -e .
-```
+uv sync
 
 4. 配置MCP：
 在你的MCP配置文件中（通常位于 `~/.cursor/mcp.json`）添加以下配置：
