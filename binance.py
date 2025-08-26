@@ -1,6 +1,7 @@
 import time
 import hmac
 import hashlib
+import time
 import requests
 from functools import lru_cache
 from typing import Any
@@ -200,6 +201,160 @@ def cancel_order(symbol: str, order_id: str) -> Any:
     if response.status_code == 200:
         return {"message": f"Order {order_id} canceled"}
     return {"error": response.text}
+
+
+@mcp.tool()
+def get_historical_klines(symbol: str, interval: str = "1h", start_time: str = None, end_time: str = None, limit: int = 500) -> Any:
+    """
+    Get historical kline/candlestick data for a symbol.
+
+    Args:
+        symbol: The trading pair, e.g., BTCUSDT.
+        interval: Kline interval (1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 12h, 1d, 3d, 1w, 1M).
+        start_time: Start time in milliseconds or ISO format (e.g., "2025-08-09 21:28:00").
+        end_time: End time in milliseconds or ISO format.
+        limit: Number of klines to return (max 1000, default 500).
+
+    Returns:
+        Historical kline data with OHLCV information.
+    """
+    url = "https://api.binance.com/api/v3/klines"
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
+    
+    # Convert time formats if provided
+    if start_time:
+        if isinstance(start_time, str) and not start_time.isdigit():
+            # Convert ISO format to timestamp
+            from datetime import datetime
+            try:
+                dt = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
+                start_time = int(dt.timestamp() * 1000)
+            except ValueError:
+                try:
+                    dt = datetime.strptime(start_time, "%Y-%m-%d %H:%M")
+                    start_time = int(dt.timestamp() * 1000)
+                except ValueError:
+                    return {"error": "Invalid start_time format. Use 'YYYY-MM-DD HH:MM:SS' or 'YYYY-MM-DD HH:MM'"}
+        params["startTime"] = start_time
+    
+    if end_time:
+        if isinstance(end_time, str) and not end_time.isdigit():
+            from datetime import datetime
+            try:
+                dt = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S")
+                end_time = int(dt.timestamp() * 1000)
+            except ValueError:
+                try:
+                    dt = datetime.strptime(end_time, "%Y-%m-%d %H:%M")
+                    end_time = int(dt.timestamp() * 1000)
+                except ValueError:
+                    return {"error": "Invalid end_time format. Use 'YYYY-MM-DD HH:MM:SS' or 'YYYY-MM-DD HH:MM'"}
+        params["endTime"] = end_time
+    
+    response = requests.get(url, params=params)
+    if response.status_code == 200:
+        klines = response.json()
+        formatted_data = []
+        for kline in klines:
+            formatted_data.append({
+                "open_time": kline[0],
+                "open_price": float(kline[1]),
+                "high_price": float(kline[2]),
+                "low_price": float(kline[3]),
+                "close_price": float(kline[4]),
+                "volume": float(kline[5]),
+                "close_time": kline[6],
+                "quote_asset_volume": float(kline[7]),
+                "number_of_trades": kline[8],
+                "taker_buy_base_asset_volume": float(kline[9]),
+                "taker_buy_quote_asset_volume": float(kline[10])
+            })
+        return {"symbol": symbol, "interval": interval, "data": formatted_data}
+    return {"error": response.text}
+
+
+@mcp.tool()
+def get_price_at_time(symbol: str, target_time: str) -> Any:
+    """
+    Get the price of a cryptocurrency at a specific time.
+
+    Args:
+        symbol: The trading pair, e.g., BTCUSDT.
+        target_time: Target time in format 'YYYY-MM-DD HH:MM:SS' or 'YYYY-MM-DD HH:MM'.
+
+    Returns:
+        Price information at the specified time.
+    """
+    from datetime import datetime, timedelta
+    
+    try:
+        # Parse target time
+        try:
+            target_dt = datetime.strptime(target_time, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            target_dt = datetime.strptime(target_time, "%Y-%m-%d %H:%M")
+        
+        # Get kline data around the target time
+        start_time = target_dt - timedelta(hours=1)
+        end_time = target_dt + timedelta(hours=1)
+        
+        start_time_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
+        end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Get 1-minute klines for more precision
+        klines_result = get_historical_klines(symbol, "1m", start_time_str, end_time_str, 120)
+        
+        if "error" in klines_result:
+            return klines_result
+        
+        klines = klines_result["data"]
+        if not klines:
+            return {"error": "No data found for the specified time"}
+        
+        # Find the closest kline to target time
+        target_timestamp = int(target_dt.timestamp() * 1000)
+        closest_kline = None
+        min_diff = float('inf')
+        
+        for kline in klines:
+            open_time = kline["open_time"]
+            close_time = kline["close_time"]
+            
+            # Check if target time falls within this kline period
+            if open_time <= target_timestamp <= close_time:
+                closest_kline = kline
+                break
+            
+            # Find closest kline if exact match not found
+            diff = min(abs(open_time - target_timestamp), abs(close_time - target_timestamp))
+            if diff < min_diff:
+                min_diff = diff
+                closest_kline = kline
+        
+        if closest_kline:
+            return {
+                "symbol": symbol,
+                "target_time": target_time,
+                "price_data": {
+                    "open_price": closest_kline["open_price"],
+                    "high_price": closest_kline["high_price"],
+                    "low_price": closest_kline["low_price"],
+                    "close_price": closest_kline["close_price"],
+                    "volume": closest_kline["volume"]
+                },
+                "kline_period": {
+                    "start": datetime.fromtimestamp(closest_kline["open_time"] / 1000).strftime("%Y-%m-%d %H:%M:%S"),
+                    "end": datetime.fromtimestamp(closest_kline["close_time"] / 1000).strftime("%Y-%m-%d %H:%M:%S")
+                },
+                "note": "Price data from the closest available 1-minute kline period"
+            }
+        
+        return {"error": "No suitable price data found for the specified time"}
+        
+    except ValueError as e:
+        return {"error": f"Invalid time format: {str(e)}. Use 'YYYY-MM-DD HH:MM:SS' or 'YYYY-MM-DD HH:MM'"}
+    except Exception as e:
+        return {"error": f"Error retrieving price data: {str(e)}"}
 
 
 @mcp.tool()
